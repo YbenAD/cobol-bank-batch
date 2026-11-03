@@ -1,0 +1,21 @@
+ BNKMAJ01 - COMPTE RENDU DE MISE A JOUR DES COMPTES   DATE : 01/11/2026
+ -------------------------------------------------------------------------------------
+ COMPTE              SOLDE AVANT   APP   REJ         SOLDE APRES  ETAT
+ -------------------------------------------------------------------------------------
+ 10000000001            1.500,00     3     0             -245,50  MIS A JOUR
+ 10000000002              250,00     1     1            1.450,00  MIS A JOUR
+ 10000000003             -100,00     2     0              100,00  MIS A JOUR
+ 10000000004           12.000,00     2     0           10.430,01  MIS A JOUR
+ 10000000005              800,00     0     1              800,00  COMPTE BLOQUE
+ 10000000006                0,00     1     1             -150,00  MIS A JOUR
+ 10000000007            3.200,50     1     0            4.200,00  MIS A JOUR
+ 10000000008               45,90     1     0               35,90  MIS A JOUR
+ 99999999999                         0     2                      COMPTE INEXISTANT
+ -------------------------------------------------------------------------------------
+ MOUVEMENTS LUS                 :      16
+ MOUVEMENTS APPLIQUES           :      11
+ MOUVEMENTS REJETES             :       5
+ COMPTES MIS A JOUR             :       7
+ TOTAL DES CREDITS              :           2.899,50
+ TOTAL DES DEBITS               :           3.975,49
+ CONTROLE LUS = APP + REJ       : OK
