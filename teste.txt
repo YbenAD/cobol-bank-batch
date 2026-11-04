@@ -1,1 +1,0 @@
-je verifie que github est a connecte avec mon depot local
