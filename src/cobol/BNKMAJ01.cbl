@@ -51,22 +51,26 @@
        DATA DIVISION.
        FILE SECTION.
        FD  F-MVTTRI
-           RECORDING MODE IS F.
+           RECORDING MODE IS F
+           BLOCK CONTAINS 0 RECORDS.
            COPY CPYMVT.
 
        FD  F-CPTMST.
            COPY CPYCPT.
 
        FD  F-MVTAPP
-           RECORDING MODE IS F.
+           RECORDING MODE IS F
+           BLOCK CONTAINS 0 RECORDS.
        01  APP-ENREG                   PIC X(80).
 
        FD  F-MVTREJ
-           RECORDING MODE IS F.
+           RECORDING MODE IS F
+           BLOCK CONTAINS 0 RECORDS.
            COPY CPYREJ.
 
        FD  F-RAPPORT
-           RECORDING MODE IS F.
+           RECORDING MODE IS F
+           BLOCK CONTAINS 0 RECORDS.
        01  RAP-LIGNE                   PIC X(132).
 
        WORKING-STORAGE SECTION.

@@ -1,20 +1,31 @@
 //DEFKSDS  JOB (ACCT),'INIT COMPTES',CLASS=A,MSGCLASS=X,
 //             MSGLEVEL=(1,1),NOTIFY=&SYSUID
 //*--------------------------------------------------------------------
-//* INITIALISATION DU FICHIER MAITRE DES COMPTES
+//* INITIALISATION DU FICHIER MAITRE DES COMPTES (RELANCABLE)
 //*
-//* STEP010 : IDCAMS - DEFINITION DU KSDS ET DE LA BASE GDG DES
-//*           SAUVEGARDES (SUPPRESSION PREALABLE SI EXISTANTS)
+//* STEP005 : IDCAMS - DEFINITION DE LA BASE GDG DES SAUVEGARDES
+//*           (ERREUR IGNOREE SI ELLE EXISTE DEJA : LES SAUVEGARDES
+//*           DES RUNS PRECEDENTS SONT CONSERVEES)
+//* STEP010 : IDCAMS - SUPPRESSION PUIS DEFINITION DU KSDS
 //* STEP020 : BNKINI01 - CHARGEMENT INITIAL DU KSDS
 //*
 //* REMARQUE : SI TON SYSTEME NE SUBSTITUE PAS &SYSUID DANS LES
 //* DONNEES IN-STREAM (SYMBOLS=JCLONLY), REMPLACE-LE PAR TON ID.
 //*--------------------------------------------------------------------
+//STEP005  EXEC PGM=IDCAMS
+//SYSPRINT DD SYSOUT=*
+//SYSIN    DD *,SYMBOLS=JCLONLY
+  DEFINE GDG (NAME(&SYSUID..BANK.CPTMST.BKP)      -
+              LIMIT(5)                            -
+              NOEMPTY                             -
+              SCRATCH)
+  SET MAXCC = 0
+/*
+//*--------------------------------------------------------------------
 //STEP010  EXEC PGM=IDCAMS
 //SYSPRINT DD SYSOUT=*
 //SYSIN    DD *,SYMBOLS=JCLONLY
   DELETE &SYSUID..BANK.CPTMST CLUSTER PURGE
-  DELETE &SYSUID..BANK.CPTMST.BKP GDG FORCE
   SET MAXCC = 0
   DEFINE CLUSTER (NAME(&SYSUID..BANK.CPTMST)      -
                   INDEXED                         -
@@ -27,10 +38,6 @@
          DATA    (NAME(&SYSUID..BANK.CPTMST.DATA) -
                   CONTROLINTERVALSIZE(4096))      -
          INDEX   (NAME(&SYSUID..BANK.CPTMST.INDEX))
-  DEFINE GDG (NAME(&SYSUID..BANK.CPTMST.BKP)      -
-              LIMIT(5)                            -
-              NOEMPTY                             -
-              SCRATCH)
 /*
 //*--------------------------------------------------------------------
 //STEP020  EXEC PGM=BNKINI01,COND=(0,NE,STEP010)

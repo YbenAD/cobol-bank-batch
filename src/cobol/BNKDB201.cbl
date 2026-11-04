@@ -14,7 +14,7 @@
       *   - TOUT AUTRE SQLCODE NEGATIF : MESSAGE DSNTIAR, ROLLBACK     *
       *     ET ARRET RC=12                                             *
       *                                                                *
-      * EXECUTION : IKJEFT01 / DSN RUN PROGRAM(BNKDB201) PLAN(BNKPLAN) *
+      * EXECUTION : IKJEFT01 / DSN RUN PROGRAM(BNKDB201) PLAN(<TON ID>)*
       *                                                                *
       * CODES RETOUR : 0 = OK   4 = DOUBLONS IGNORES                   *
       *               12 = ERREUR SQL   16 = ERREUR FICHIER            *
@@ -29,7 +29,8 @@
        DATA DIVISION.
        FILE SECTION.
        FD  F-MVTAPP
-           RECORDING MODE IS F.
+           RECORDING MODE IS F
+           BLOCK CONTAINS 0 RECORDS.
            COPY CPYMVT.
 
        WORKING-STORAGE SECTION.

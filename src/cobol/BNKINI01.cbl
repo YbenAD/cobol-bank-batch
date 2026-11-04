@@ -26,7 +26,8 @@
        DATA DIVISION.
        FILE SECTION.
        FD  F-SEEDCPT
-           RECORDING MODE IS F.
+           RECORDING MODE IS F
+           BLOCK CONTAINS 0 RECORDS.
        01  SEED-ENREG.
            05  SEED-NUM                PIC X(11).
            05  SEED-TITULAIRE          PIC X(30).

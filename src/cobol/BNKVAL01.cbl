@@ -39,15 +39,18 @@
        DATA DIVISION.
        FILE SECTION.
        FD  F-MVTIN
-           RECORDING MODE IS F.
+           RECORDING MODE IS F
+           BLOCK CONTAINS 0 RECORDS.
            COPY CPYMVT.
 
        FD  F-MVTOK
-           RECORDING MODE IS F.
+           RECORDING MODE IS F
+           BLOCK CONTAINS 0 RECORDS.
        01  OK-ENREG                    PIC X(80).
 
        FD  F-MVTREJ
-           RECORDING MODE IS F.
+           RECORDING MODE IS F
+           BLOCK CONTAINS 0 RECORDS.
            COPY CPYREJ.
 
        WORKING-STORAGE SECTION.
