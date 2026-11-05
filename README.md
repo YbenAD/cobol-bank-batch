@@ -5,7 +5,7 @@ Application bancaire écrite pour z/OS, avec une partie batch et une partie tran
 - **Batch** : la chaîne valide les mouvements du jour, les trie, met à jour le fichier maître des comptes en contrôlant le découvert autorisé, produit un compte rendu avec totaux de contrôle, puis charge l'historique dans une table DB2.
 - **Transactionnel** : la transaction CICS `BNKI` permet de consulter un compte en temps réel sur un écran 3270, à partir du même fichier VSAM que celui mis à jour par le batch.
 
-> ✅ **Testée de bout en bout sur un vrai mainframe** (IBM Z Xplore : z/OS 3.1, Enterprise COBOL, Db2 for z/OS) — voir [Exécution sur z/OS](#exécution-sur-zos-ibm-z-xplore).
+> ✅ **Testée de bout en bout sur un vrai mainframe** (IBM Z Xplore : z/OS 3.1, Enterprise COBOL, Db2 for z/OS, région CICS TS personnelle) — voir [Exécution sur z/OS](#exécution-sur-zos-ibm-z-xplore).
 > ✅ **Testée en continu** à chaque push avec GnuCOBOL (GitHub Actions), à partir des mêmes sources.
 
 ---
@@ -65,26 +65,31 @@ Le compte rendu obtenu sur z/OS est identique, ligne pour ligne, à celui produi
 
 ## Transaction CICS BNKI : consultation de compte
 
-L'utilisateur saisit un numéro de compte sur un écran 3270 ; le programme lit le compte dans le KSDS et affiche le titulaire, le solde, le découvert autorisé, le solde disponible, le statut et la date de dernière mise à jour.
+L'utilisateur saisit un numéro de compte sur un écran 3270 ; le programme lit le compte dans le KSDS et affiche le titulaire, le solde, le découvert autorisé, le solde disponible, le statut et la date de dernière mise à jour. Captures réalisées sur la région CICS, après exécution de la chaîne batch :
 
-```
- BNKI                    CONSULTATION DE COMPTE                      05/11/2026
+**Compte actif à découvert** (le solde négatif s'affiche en rouge ; on retrouve le solde de -245,50 calculé par le batch)
 
- NUMERO DE COMPTE     :  10000000001
+![Transaction BNKI : compte actif](docs/cics-bnki-compte-actif.png)
 
- TITULAIRE            :  MARTIN JEAN
+**Compte bloqué** (statut en rouge)
 
- SOLDE                :            -245,50      (en rouge si négatif)
- DECOUVERT AUTORISE   :             500,00
- SOLDE DISPONIBLE     :             254,50
+![Transaction BNKI : compte bloqué](docs/cics-bnki-compte-bloque.png)
 
- STATUT DU COMPTE     :  ACTIF                  (BLOQUE en rouge)
- DERNIERE MISE A JOUR :  01/11/2026
+**Fichier fermé pendant le batch** (`CEMT SET FILE(CPTMST) CLOSED DISABLED`) : message clair au lieu d'un abend
 
- COMPTE TROUVE - AUTRE NUMERO OU PF3 POUR QUITTER
+![Transaction BNKI : fichier fermé](docs/cics-bnki-fichier-ferme.png)
 
- ENTREE=CONSULTER   PF3/CLEAR=QUITTER
-```
+**Tests réalisés sur la région CICS**
+
+| Saisie | Résultat |
+|---|---|
+| Premier appel `BNKI` | Écran vide, curseur sur la saisie, date du jour |
+| Compte existant | Informations du compte, solde négatif et compte bloqué en rouge |
+| Compte inexistant | « COMPTE ... INEXISTANT » en rouge (`RESP = NOTFND`) |
+| Saisie incomplète ou non numérique | « LE NUMERO DE COMPTE DOIT COMPORTER 11 CHIFFRES » |
+| Touche non prévue (PF5…) | « TOUCHE NON VALIDE » |
+| Fichier fermé et désactivé | « FICHIER DES COMPTES FERME (BATCH EN COURS) » (`RESP = DISABLED`) |
+| PF3 ou CLEAR | Message de fin et sortie de la transaction |
 
 **Conception**
 
@@ -175,7 +180,7 @@ CEMT SET FILE(CPTMST) ENABLED             après le batch
 
 ## Problèmes rencontrés sur z/OS et solutions
 
-Le passage de GnuCOBOL au vrai mainframe a demandé plusieurs adaptations, toutes diagnostiquées à partir des messages système :
+Le passage de GnuCOBOL au vrai mainframe a demandé plusieurs adaptations, toutes diagnostiquées à partir des messages système ou des tests :
 
 | Symptôme | Cause | Solution |
 |---|---|---|
@@ -185,6 +190,7 @@ Le passage de GnuCOBOL au vrai mainframe a demandé plusieurs adaptations, toute
 | `IEW2456E SYMBOL CEESTART UNRESOLVED` (et autres `CEE*`, `IGZ*`) à l'édition de liens | Bibliothèque Language Environment absente du `SYSLIB` | `LKED.SYSLIB` déclaré explicitement : `CEE.SCEELKED` puis `SDSNLOAD` |
 | `DSN SYSTEM(&SSID)` transmis tel quel, `COMMAND BIND NOT FOUND` | Un symbole défini par `SET` n'est pas substitué dans les cartes in-stream | Ajout de `// EXPORT SYMLIST=*` |
 | `DSNT235I BIND AUTHORIZATION ERROR ... PRIVILEGE = BINDADD` | Création de package interdite au compte étudiant | DBRM lié directement dans le plan (`BIND PLAN ... MEMBER(BNKDB201)`). En entreprise : `BIND PACKAGE` dans une collection, puis `BIND PLAN ... PKLIST` |
+| Transaction CICS : message « COMPTE ... INEXISTANT**OU PF3 POUR QUITTER** » | `STRING` n'efface pas la fin de la zone réceptrice : il restait la fin du message précédent | `MOVE SPACES` sur la zone avant chaque `STRING` |
 
 ## Déploiement sur z/OS (Zowe CLI)
 

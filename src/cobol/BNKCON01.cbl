@@ -156,6 +156,8 @@
                       PERFORM 2200-AFFICHER-COMPTE
                   WHEN DFHRESP(NOTFND)
                       SET MSG-ERREUR TO TRUE
+      *               STRING N'EFFACE PAS LA FIN DE LA ZONE RECEPTRICE
+                      MOVE SPACES TO WS-MESSAGE
                       STRING 'COMPTE ' WS-CLE ' INEXISTANT'
                              DELIMITED BY SIZE INTO WS-MESSAGE
                   WHEN DFHRESP(NOTOPEN)
@@ -224,6 +226,7 @@
        7000-ERREUR-CICS.
            MOVE WS-RESP TO WS-RESP-ED
            SET MSG-ERREUR TO TRUE
+           MOVE SPACES TO WS-MESSAGE
            STRING 'ERREUR CICS INATTENDUE, RESP = ' WS-RESP-ED
                   DELIMITED BY SIZE INTO WS-MESSAGE.
 
