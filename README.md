@@ -1,8 +1,9 @@
 # Batch bancaire COBOL — mainframe z/OS
 
-Chaîne batch complète de traitement des mouvements bancaires quotidiens, écrite pour z/OS : **COBOL, JCL, VSAM KSDS, DFSORT, IDCAMS, GDG et DB2**.
+Application bancaire écrite pour z/OS, avec une partie batch et une partie transactionnelle : **COBOL, JCL, VSAM KSDS, DFSORT, IDCAMS, GDG, DB2 et CICS (BMS)**.
 
-La chaîne valide les mouvements du jour, les trie, met à jour le fichier maître des comptes en contrôlant le découvert autorisé, produit un compte rendu avec totaux de contrôle, puis charge l'historique dans une table DB2.
+- **Batch** : la chaîne valide les mouvements du jour, les trie, met à jour le fichier maître des comptes en contrôlant le découvert autorisé, produit un compte rendu avec totaux de contrôle, puis charge l'historique dans une table DB2.
+- **Transactionnel** : la transaction CICS `BNKI` permet de consulter un compte en temps réel sur un écran 3270, à partir du même fichier VSAM que celui mis à jour par le batch.
 
 > ✅ **Testée de bout en bout sur un vrai mainframe** (IBM Z Xplore : z/OS 3.1, Enterprise COBOL, Db2 for z/OS) — voir [Exécution sur z/OS](#exécution-sur-zos-ibm-z-xplore).
 > ✅ **Testée en continu** à chaque push avec GnuCOBOL (GitHub Actions), à partir des mêmes sources.
@@ -26,6 +27,8 @@ flowchart LR
     MAJ --> RAP[/RAPPORT<br/>compte rendu/]
     APP --> DB2(STEP040<br/>BNKDB201<br/>IKJEFT01)
     DB2 --> HIST[(DB2<br/>MVT_HIST)]
+    T3270[[Terminal 3270<br/>transaction BNKI]] <--> CICS(CICS<br/>BNKCON01<br/>écran BMS)
+    KSDS -. lecture .-> CICS
 ```
 
 ## Exécution sur z/OS (IBM Z Xplore)
@@ -60,6 +63,54 @@ RC=4 sur les steps de traitement est attendu : le jeu de test contient volontair
 
 Le compte rendu obtenu sur z/OS est identique, ligne pour ligne, à celui produit par GnuCOBOL dans GitHub Actions (`tests/expected/rapport.txt`).
 
+## Transaction CICS BNKI : consultation de compte
+
+L'utilisateur saisit un numéro de compte sur un écran 3270 ; le programme lit le compte dans le KSDS et affiche le titulaire, le solde, le découvert autorisé, le solde disponible, le statut et la date de dernière mise à jour.
+
+```
+ BNKI                    CONSULTATION DE COMPTE                      05/11/2026
+
+ NUMERO DE COMPTE     :  10000000001
+
+ TITULAIRE            :  MARTIN JEAN
+
+ SOLDE                :            -245,50      (en rouge si négatif)
+ DECOUVERT AUTORISE   :             500,00
+ SOLDE DISPONIBLE     :             254,50
+
+ STATUT DU COMPTE     :  ACTIF                  (BLOQUE en rouge)
+ DERNIERE MISE A JOUR :  01/11/2026
+
+ COMPTE TROUVE - AUTRE NUMERO OU PF3 POUR QUITTER
+
+ ENTREE=CONSULTER   PF3/CLEAR=QUITTER
+```
+
+**Conception**
+
+- **Pseudo-conversationnel** : après chaque écran, le programme rend la main à CICS (`RETURN TRANSID('BNKI') COMMAREA`) et n'occupe aucune ressource pendant que l'utilisateur saisit. Le premier appel est détecté par `EIBCALEN = 0`, la touche par `EIBAID` (copybook `DFHAID`).
+- **Écran BMS** assemblé deux fois : map physique chargée par CICS, map symbolique utilisée comme copybook par le programme. Couleurs dynamiques (`DSATTS=COLOR`) : solde négatif, compte bloqué et messages d'erreur en rouge.
+- **Toutes les commandes sensibles testées par `RESP`** : `MAPFAIL` (rien saisi), `NOTFND` (compte inexistant), `NOTOPEN`/`DISABLED` (fichier fermé pendant le batch), autres erreurs avec le code RESP affiché.
+- **Contrôle de saisie** : le numéro doit comporter 11 chiffres avant toute lecture du fichier.
+- **Lecture seule** : le fichier est défini dans CICS avec `READ(YES)` uniquement ; seule la chaîne batch met à jour les comptes.
+- **Même copybook `CPYCPT`** pour le batch et le transactionnel : une seule description de l'enregistrement.
+
+**Ressources CICS (groupe `BNKGRP`)**
+
+| Type | Nom | Rôle |
+|---|---|---|
+| TRANSACTION | `BNKI` | Code saisi par l'utilisateur |
+| PROGRAM | `BNKCON01` | Programme COBOL |
+| MAPSET | `BNKMS01` | Écran BMS |
+| FILE | `CPTMST` | KSDS des comptes, lecture seule |
+
+**Cohabitation avec le batch** : la chaîne batch ouvre le KSDS en exclusivité (`DISP=OLD`). Avant de la lancer, on ferme le fichier dans CICS, puis on le rouvre ensuite ; pendant ce temps, `BNKI` affiche « FICHIER DES COMPTES FERME (BATCH EN COURS) » au lieu d'abender.
+
+```
+CEMT SET FILE(CPTMST) CLOSED DISABLED     avant BNKCHAIN ou DEFKSDS
+CEMT SET FILE(CPTMST) ENABLED             après le batch
+```
+
 ## Contenu du dépôt
 
 | Élément | Rôle |
@@ -68,6 +119,8 @@ Le compte rendu obtenu sur z/OS est identique, ligne pour ligne, à celui produi
 | `src/cobol/BNKVAL01.cbl` | Validation des mouvements (8 contrôles, dont dates et années bissextiles) |
 | `src/cobol/BNKMAJ01.cbl` | Mise à jour du KSDS par rupture sur le compte, contrôle du découvert, compte rendu |
 | `src/cobol/BNKDB201.cbl` | Chargement de l'historique DB2 (INSERT, COMMIT périodique, gestion SQLCODE) |
+| `src/cobol/BNKCON01.cbl` | Programme CICS de la transaction `BNKI` (consultation de compte) |
+| `src/bms/BNKMS01.bms` | Écran BMS de la transaction `BNKI` |
 | `src/copybook/` | Descriptions d'enregistrements (`CPYMVT`, `CPYCPT`, `CPYREJ`) et DCLGEN DB2 (`DCLMVTH`) |
 | `jcl/ALLOC.jcl` | Allocation des bibliothèques et fichiers d'entrée (IEFBR14) |
 | `jcl/DEFKSDS.jcl` | IDCAMS : définition de la GDG et du KSDS, puis chargement initial (relançable) |
@@ -76,9 +129,12 @@ Le compte rendu obtenu sur z/OS est identique, ligne pour ligne, à celui produi
 | `jcl/BNKCHAIN.jcl` | La chaîne batch complète (6 steps) |
 | `jcl/LOADDB2.jcl` | Relance seule du chargement DB2 après incident |
 | `jcl/RESTORE.jcl` | Restauration du KSDS depuis la dernière sauvegarde |
+| `jcl/COMPBMS.jcl` | Assemblage de l'écran BMS : map physique et map symbolique |
+| `jcl/COMPCICS.jcl` | Compilation du programme CICS (procédure DFHZITCL, traducteur intégré) |
+| `jcl/DEFCICS.jcl` | Définitions CICS du groupe `BNKGRP` par DFHCSDUP (alternative à CEDA) |
 | `sql/CRTABLE.sql` | DDL de la table `MVT_HIST` et requêtes de contrôle |
 | `data/` | Jeu de test : 8 comptes, 25 mouvements dont 14 cas d'erreur |
-| `tests/` | Exécution locale de la chaîne et résultats attendus |
+| `tests/` | Exécution locale de la chaîne, résultats attendus et vérification syntaxique du programme CICS |
 | `docs/` | Captures de l'exécution sur z/OS |
 
 ## Règles de gestion
@@ -167,6 +223,29 @@ zowe zos-jobs submit local-file "jcl/BNKCHAIN.jcl" --wait-for-output
 
 Pour retrouver les mêmes résultats lors d'une nouvelle exécution, relancer `DEFKSDS.jcl` avant `BNKCHAIN.jcl` (sinon les mouvements s'appliquent à des soldes déjà mis à jour).
 
+**5. Transaction CICS.** Région CICS démarrée ; écran BMS dans une bibliothèque `Z99999.BANK.BMS` (FB 80).
+
+```bash
+zowe zos-files create data-set "Z99999.BANK.BMS" --like "Z99999.CBL"
+zowe zos-files upload dir-to-pds "src/bms" "Z99999.BANK.BMS"
+zowe zos-jobs submit local-file "jcl/COMPBMS.jcl"  --wait-for-output
+zowe zos-jobs submit local-file "jcl/COMPCICS.jcl" --wait-for-output
+```
+
+Puis, sur le terminal 3270 connecté à la région :
+
+```
+CEDA DEFINE PROGRAM(BNKCON01) GROUP(BNKGRP) LANGUAGE(COBOL)
+CEDA DEFINE MAPSET(BNKMS01) GROUP(BNKGRP)
+CEDA DEFINE TRANSACTION(BNKI) GROUP(BNKGRP) PROGRAM(BNKCON01)
+CEDA DEFINE FILE(CPTMST) GROUP(BNKGRP) DSNAME(Z99999.BANK.CPTMST)
+     READ(YES) BROWSE(NO) ADD(NO) UPDATE(NO) DELETE(NO)
+CEDA INSTALL GROUP(BNKGRP)
+BNKI
+```
+
+Après une recompilation : `CEMT SET PROGRAM(BNKCON01) NEWCOPY` (et `CEMT SET PROGRAM(BNKMS01) NEWCOPY` pour l'écran).
+
 ## Exécution locale (GnuCOBOL)
 
 ```bash
@@ -174,15 +253,17 @@ sudo apt-get install gnucobol     # ou : brew install gnucobol
 bash tests/run_local.sh
 ```
 
-Le script compile les programmes, convertit les données au format mainframe (enregistrements fixes `RECFM=FB`, sans fin de ligne), exécute les steps dans l'ordre du JCL et compare les sorties aux résultats attendus (`tests/expected/`). Les cartes DD sont simulées par des variables d'environnement (`DD_MVTIN`, `DD_CPTMST`…), ce qui permet d'utiliser les sources z/OS sans aucune modification. Le tri DFSORT est émulé avec `sort`. Le step DB2 n'est exécutable que sur z/OS.
+Le script compile les programmes batch, convertit les données au format mainframe (enregistrements fixes `RECFM=FB`, sans fin de ligne), exécute les steps dans l'ordre du JCL et compare les sorties aux résultats attendus (`tests/expected/`). Les cartes DD sont simulées par des variables d'environnement (`DD_MVTIN`, `DD_CPTMST`…), ce qui permet d'utiliser les sources z/OS sans aucune modification. Le tri DFSORT est émulé avec `sort`. Le step DB2 n'est exécutable que sur z/OS.
+
+`python3 tests/cics_syntax_check.py` vérifie la syntaxe COBOL du programme CICS : les commandes `EXEC CICS` sont neutralisées et les copybooks CICS simulés, le reste du programme est compilé par GnuCOBOL. Le script vérifie aussi que chaque champ utilisé par le programme existe dans l'écran BMS avec la bonne longueur.
 
 ## Pistes d'évolution
 
-- Transaction **CICS** de consultation d'un compte (écran BMS + lecture du KSDS).
-- Exposition de cette consultation en **API REST** avec z/OS Connect.
+- Exposition de la consultation de compte en **API REST** avec z/OS Connect (programme CICS séparé de l'écran, avec COMMAREA ou channel/container).
+- Transaction de **consultation de l'historique DB2** d'un compte, avec pagination (curseur SQL, PF7/PF8).
 - Ordonnancement de la chaîne (Control-M ou IBM Workload Scheduler).
 - Extraction des rejets vers un fichier CSV pour les équipes métier.
 
 ## Environnement
 
-Développé avec VS Code (IBM Z Open Editor, Zowe Explorer, Db2 for z/OS Developer Extension) et Zowe CLI ; exécuté sur IBM Z Xplore ; testé en continu avec GnuCOBOL 3.
+Développé avec VS Code (IBM Z Open Editor, Zowe Explorer, IBM CICS for Zowe Explorer, Db2 for z/OS Developer Extension) et Zowe CLI ; exécuté sur IBM Z Xplore (région CICS TS 6.2 personnelle) ; testé en continu avec GnuCOBOL 3.
