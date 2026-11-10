@@ -16,5 +16,5 @@ jobs:
       - name: Compiler et exécuter la chaîne batch
         run: bash tests/run_local.sh
 
-      - name: Vérifier la syntaxe du programme CICS
-        run: python3 tests/cics_syntax_check.py
+      - name: Vérifier la syntaxe des programmes CICS et DB2
+        run: python3 tests/zos_syntax_check.py

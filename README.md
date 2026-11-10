@@ -3,7 +3,7 @@
 Application bancaire écrite pour z/OS, avec une partie batch et une partie transactionnelle : **COBOL, JCL, VSAM KSDS, DFSORT, IDCAMS, GDG, DB2 et CICS (BMS)**.
 
 - **Batch** : la chaîne valide les mouvements du jour, les trie, met à jour le fichier maître des comptes en contrôlant le découvert autorisé, produit un compte rendu avec totaux de contrôle, puis charge l'historique dans une table DB2.
-- **Transactionnel** : la transaction CICS `BNKI` permet de consulter un compte en temps réel sur un écran 3270, à partir du même fichier VSAM que celui mis à jour par le batch.
+- **Transactionnel** : la transaction CICS `BNKI` permet de consulter un compte en temps réel sur un écran 3270, à partir du même fichier VSAM que celui mis à jour par le batch ; la transaction `BNKH` affiche l'historique de ses mouvements, page par page, à partir d'une extraction de la table DB2.
 
 > ✅ **Testée de bout en bout sur un vrai mainframe** (IBM Z Xplore : z/OS 3.1, Enterprise COBOL, Db2 for z/OS, région CICS TS personnelle) — voir [Exécution sur z/OS](#exécution-sur-zos-ibm-z-xplore).
 > ✅ **Testée en continu** à chaque push avec GnuCOBOL (GitHub Actions), à partir des mêmes sources.
@@ -27,8 +27,11 @@ flowchart LR
     MAJ --> RAP[/RAPPORT<br/>compte rendu/]
     APP --> DB2(STEP040<br/>BNKDB201<br/>IKJEFT01)
     DB2 --> HIST[(DB2<br/>MVT_HIST)]
-    T3270[[Terminal 3270<br/>transaction BNKI]] <--> CICS(CICS<br/>BNKCON01<br/>écran BMS)
+    HIST --> EXT(EXTHIST<br/>BNKEXT01<br/>extraction)
+    EXT --> KHIS[(MVTHIST<br/>VSAM KSDS)]
+    T3270[[Terminal 3270<br/>BNKI / BNKH]] <--> CICS(CICS<br/>BNKCON01 / BNKHIS01<br/>écrans BMS)
     KSDS -. lecture .-> CICS
+    KHIS -. parcours .-> CICS
 ```
 
 ## Exécution sur z/OS (IBM Z Xplore)
@@ -116,6 +119,33 @@ CEMT SET FILE(CPTMST) CLOSED DISABLED     avant BNKCHAIN ou DEFKSDS
 CEMT SET FILE(CPTMST) ENABLED             après le batch
 ```
 
+## Transaction CICS BNKH : historique des mouvements avec pagination
+
+L'utilisateur saisit un numéro de compte ; la transaction affiche le titulaire et les mouvements du compte, du plus récent au plus ancien, 10 par page (PF8 : plus anciens, PF7 : plus récents). Débits en rouge, crédits en vert.
+
+Capture réalisée sur la région CICS, page 2 du compte `10000000004` (26 mouvements, dont 24 de démonstration) : la page reprend exactement après la dernière ligne de la page 1, sans trou ni doublon.
+
+![Transaction BNKH : historique, page 2](docs/cics-bnkh-historique-page2.png)
+
+**Architecture : DB2 → extraction → VSAM → CICS**
+
+La région CICS de l'environnement n'est pas connectée à DB2 (`CEMT INQUIRE DB2CONN` : `NOT FOUND`), et sa configuration est gérée par le système. Plutôt que de modifier la procédure de démarrage fournie, l'historique est mis à disposition du transactionnel par une **extraction batch**, un schéma courant en production :
+
+- **DB2 reste la référence** : la table `MVT_HIST` est alimentée par la chaîne batch (`BNKDB201`).
+- **`BNKEXT01`** (job `EXTHIST`) lit la table avec un curseur trié et écrit le KSDS `BANK.MVTHIST`. En production, ce serait un step de la chaîne, juste après le chargement DB2.
+- **`BNKH`** lit ce KSDS en parcours CICS (`STARTBR`, `READNEXT`, `READPREV`, `ENDBR`).
+
+**Conception**
+
+- **Clé du KSDS = compte + date inversée (99999999 − AAAAMMJJ) + référence** : pour un compte, l'ordre croissant des clés donne directement les mouvements du plus récent au plus ancien, sans tri à l'exécution.
+- **Pagination par clé** : la COMMAREA conserve la clé de la première et de la dernière ligne affichées. PF8 repart de la dernière avec `READNEXT`, PF7 de la première avec `READPREV`, puis le programme remet les lignes dans l'ordre d'affichage. Le premier enregistrement lu (celui de départ, déjà affiché) est ignoré. Le coût d'une page ne dépend pas de sa position dans l'historique.
+- **Détection de la page suivante** : 11 lignes lues pour 10 affichées ; la 11e indique qu'il existe une page suivante, sans lecture supplémentaire.
+- **Pseudo-conversationnel** : chaque parcours est ouvert et fermé (`ENDBR`) dans la même tâche.
+- **`SEND MAP DATAONLY`** pour les messages seuls (première ou dernière page, touche non valide) : seule la ligne de message est transmise, la liste reste à l'écran.
+- **Robustesse** : fichier fermé pendant l'extraction (« HISTORIQUE INDISPONIBLE »), clé de départ disparue après un rechargement (« REFAITES LA RECHERCHE »), fichier des comptes fermé (l'historique reste consultable).
+
+`sql/HISTDEMO.sql` ajoute 24 mouvements de démonstration au compte `10000000004` (26 au total, soit 3 pages).
+
 ## Contenu du dépôt
 
 | Élément | Rôle |
@@ -125,21 +155,26 @@ CEMT SET FILE(CPTMST) ENABLED             après le batch
 | `src/cobol/BNKMAJ01.cbl` | Mise à jour du KSDS par rupture sur le compte, contrôle du découvert, compte rendu |
 | `src/cobol/BNKDB201.cbl` | Chargement de l'historique DB2 (INSERT, COMMIT périodique, gestion SQLCODE) |
 | `src/cobol/BNKCON01.cbl` | Programme CICS de la transaction `BNKI` (consultation de compte) |
+| `src/cobol/BNKEXT01.cbl` | Extraction de l'historique DB2 vers un KSDS pour le transactionnel |
+| `src/cobol/BNKHIS01.cbl` | Programme CICS de la transaction `BNKH` (historique paginé, parcours VSAM) |
 | `src/bms/BNKMS01.bms` | Écran BMS de la transaction `BNKI` |
-| `src/copybook/` | Descriptions d'enregistrements (`CPYMVT`, `CPYCPT`, `CPYREJ`) et DCLGEN DB2 (`DCLMVTH`) |
+| `src/bms/BNKMS02.bms` | Écran BMS de la transaction `BNKH` |
+| `src/copybook/` | Descriptions d'enregistrements (`CPYMVT`, `CPYCPT`, `CPYREJ`, `CPYHIS`) et DCLGEN DB2 (`DCLMVTH`) |
 | `jcl/ALLOC.jcl` | Allocation des bibliothèques et fichiers d'entrée (IEFBR14) |
 | `jcl/DEFKSDS.jcl` | IDCAMS : définition de la GDG et du KSDS, puis chargement initial (relançable) |
 | `jcl/COMPBAT.jcl` | Compilation des programmes batch (procédure IGYWCL) |
-| `jcl/COMPDB2.jcl` | Compilation avec le coprocesseur DB2, édition de liens et BIND |
+| `jcl/COMPDB2.jcl` | Compilation d'un programme batch DB2 (symbole `PROG`) avec le coprocesseur DB2, édition de liens et BIND |
 | `jcl/BNKCHAIN.jcl` | La chaîne batch complète (6 steps) |
 | `jcl/LOADDB2.jcl` | Relance seule du chargement DB2 après incident |
+| `jcl/EXTHIST.jcl` | Extraction de l'historique DB2 vers le KSDS `MVTHIST` lu par CICS |
 | `jcl/RESTORE.jcl` | Restauration du KSDS depuis la dernière sauvegarde |
-| `jcl/COMPBMS.jcl` | Assemblage de l'écran BMS : map physique et map symbolique |
-| `jcl/COMPCICS.jcl` | Compilation du programme CICS (procédure DFHZITCL, traducteur intégré) |
+| `jcl/COMPBMS.jcl` | Assemblage d'un écran BMS (symbole `MAPSET`) : map physique et map symbolique |
+| `jcl/COMPCICS.jcl` | Compilation d'un programme CICS (symbole `PROG`, procédure DFHZITCL, traducteur intégré) |
 | `jcl/DEFCICS.jcl` | Définitions CICS du groupe `BNKGRP` par DFHCSDUP (alternative à CEDA) |
 | `sql/CRTABLE.sql` | DDL de la table `MVT_HIST` et requêtes de contrôle |
+| `sql/HISTDEMO.sql` | Jeu de démonstration de la pagination (24 mouvements supplémentaires) |
 | `data/` | Jeu de test : 8 comptes, 25 mouvements dont 14 cas d'erreur |
-| `tests/` | Exécution locale de la chaîne, résultats attendus et vérification syntaxique du programme CICS |
+| `tests/` | Exécution locale de la chaîne, résultats attendus et vérification syntaxique des programmes CICS et DB2 |
 | `docs/` | Captures de l'exécution sur z/OS |
 
 ## Règles de gestion
@@ -190,6 +225,8 @@ Le passage de GnuCOBOL au vrai mainframe a demandé plusieurs adaptations, toute
 | `IEW2456E SYMBOL CEESTART UNRESOLVED` (et autres `CEE*`, `IGZ*`) à l'édition de liens | Bibliothèque Language Environment absente du `SYSLIB` | `LKED.SYSLIB` déclaré explicitement : `CEE.SCEELKED` puis `SDSNLOAD` |
 | `DSN SYSTEM(&SSID)` transmis tel quel, `COMMAND BIND NOT FOUND` | Un symbole défini par `SET` n'est pas substitué dans les cartes in-stream | Ajout de `// EXPORT SYMLIST=*` |
 | `DSNT235I BIND AUTHORIZATION ERROR ... PRIVILEGE = BINDADD` | Création de package interdite au compte étudiant | DBRM lié directement dans le plan (`BIND PLAN ... MEMBER(BNKDB201)`). En entreprise : `BIND PACKAGE` dans une collection, puis `BIND PLAN ... PKLIST` |
+| `CEMT INQUIRE DB2CONN` : `NOT FOUND` | La région CICS n'est pas connectée à DB2, et sa procédure de démarrage appartient au système | Pas de modification de la configuration fournie : extraction batch DB2 → KSDS (`BNKEXT01`), lu par CICS en parcours VSAM |
+| `BNKH` : abend `APCT` | Le mapset avait été défini sous un nom erroné (`NBKMS02`) : le bon mapset n'était pas installé (`CEMT INQUIRE PROGRAM(BNKMS02)` : `NOT FOUND`) | Définition erronée supprimée, `CEDA INSTALL MAPSET(BNKMS02)` |
 | Transaction CICS : message « COMPTE ... INEXISTANT**OU PF3 POUR QUITTER** » | `STRING` n'efface pas la fin de la zone réceptrice : il restait la fin du message précédent | `MOVE SPACES` sur la zone avant chaque `STRING` |
 
 ## Déploiement sur z/OS (Zowe CLI)
@@ -250,7 +287,34 @@ CEDA INSTALL GROUP(BNKGRP)
 BNKI
 ```
 
-Après une recompilation : `CEMT SET PROGRAM(BNKCON01) NEWCOPY` (et `CEMT SET PROGRAM(BNKMS01) NEWCOPY` pour l'écran).
+Après une recompilation : `CEMT SET PROGRAM(BNKCON01) NEWCOPY` (et `CEMT SET PROGRAM(BNKMS01) NEWCOPY` pour l'écran : une fois installé, un mapset se gère avec les commandes PROGRAM).
+
+**6. Transaction BNKH (historique).** Extraction DB2 vers VSAM, puis transaction CICS.
+
+```bash
+zowe zos-files upload file-to-data-set "src/copybook/CPYHIS.cpy" "Z99999.BANK.CPY(CPYHIS)"
+zowe zos-files upload file-to-data-set "src/cobol/BNKEXT01.cbl" "Z99999.BANK.COBOL(BNKEXT01)"
+zowe zos-files upload file-to-data-set "src/cobol/BNKHIS01.cbl" "Z99999.BANK.COBOL(BNKHIS01)"
+zowe zos-files upload file-to-data-set "src/bms/BNKMS02.bms"    "Z99999.BANK.BMS(BNKMS02)"
+zowe zos-jobs submit local-file "jcl/COMPDB2.jcl"  --wait-for-output   # PROG=BNKEXT01
+zowe zos-jobs submit local-file "jcl/EXTHIST.jcl"  --wait-for-output
+zowe zos-jobs submit local-file "jcl/COMPBMS.jcl"  --wait-for-output   # MAPSET=BNKMS02
+zowe zos-jobs submit local-file "jcl/COMPCICS.jcl" --wait-for-output   # PROG=BNKHIS01
+```
+
+Puis sur le terminal 3270 :
+
+```
+CEDA DEFINE PROGRAM(BNKHIS01) GROUP(BNKGRP) LANGUAGE(COBOL)
+CEDA DEFINE MAPSET(BNKMS02) GROUP(BNKGRP)
+CEDA DEFINE TRANSACTION(BNKH) GROUP(BNKGRP) PROGRAM(BNKHIS01)
+CEDA DEFINE FILE(MVTHIST) GROUP(BNKGRP) DSNAME(Z99999.BANK.MVTHIST)
+     READ(YES) BROWSE(YES) ADD(NO) UPDATE(NO) DELETE(NO)
+CEDA INSTALL GROUP(BNKGRP)
+BNKH
+```
+
+Pour rafraîchir l'historique après une nouvelle exécution de la chaîne : `CEMT SET FILE(MVTHIST) CLOSED DISABLED`, job `EXTHIST`, puis `CEMT SET FILE(MVTHIST) ENABLED`.
 
 ## Exécution locale (GnuCOBOL)
 
@@ -261,12 +325,12 @@ bash tests/run_local.sh
 
 Le script compile les programmes batch, convertit les données au format mainframe (enregistrements fixes `RECFM=FB`, sans fin de ligne), exécute les steps dans l'ordre du JCL et compare les sorties aux résultats attendus (`tests/expected/`). Les cartes DD sont simulées par des variables d'environnement (`DD_MVTIN`, `DD_CPTMST`…), ce qui permet d'utiliser les sources z/OS sans aucune modification. Le tri DFSORT est émulé avec `sort`. Le step DB2 n'est exécutable que sur z/OS.
 
-`python3 tests/cics_syntax_check.py` vérifie la syntaxe COBOL du programme CICS : les commandes `EXEC CICS` sont neutralisées et les copybooks CICS simulés, le reste du programme est compilé par GnuCOBOL. Le script vérifie aussi que chaque champ utilisé par le programme existe dans l'écran BMS avec la bonne longueur.
+`python3 tests/zos_syntax_check.py` vérifie la syntaxe COBOL des programmes CICS et DB2 (`BNKCON01`, `BNKHIS01`, `BNKDB201`, `BNKEXT01`) : les commandes `EXEC CICS` et `EXEC SQL` sont neutralisées, les copybooks CICS et la SQLCA simulés, et la map symbolique de chaque écran est générée à partir du source BMS. Un champ utilisé par un programme mais absent de son écran fait échouer le contrôle.
 
 ## Pistes d'évolution
 
 - Exposition de la consultation de compte en **API REST** avec z/OS Connect (programme CICS séparé de l'écran, avec COMMAREA ou channel/container).
-- Transaction de **consultation de l'historique DB2** d'un compte, avec pagination (curseur SQL, PF7/PF8).
+- Sélection d'un mouvement dans la liste `BNKH` pour en afficher le détail (`XCTL` vers une transaction de détail, COMMAREA).
 - Ordonnancement de la chaîne (Control-M ou IBM Workload Scheduler).
 - Extraction des rejets vers un fichier CSV pour les équipes métier.
 
